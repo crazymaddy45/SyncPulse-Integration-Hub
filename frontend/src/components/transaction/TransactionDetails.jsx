@@ -299,24 +299,30 @@ export function TransactionDetails({ txSummary, onClose, onRetrySuccess, onRetry
                       <div className="tx-ai-value">{aiResult.recommendation}</div>
                     </div>
 
-                    <div className="tx-ai-fix-grid">
-                      <div className="tx-ai-fix-item">
-                        <div className="tx-ai-label">Field</div>
-                        <div className="tx-ai-value">{aiResult.suggestedFix?.field}</div>
+                    {(aiResult.issues || (aiResult.suggestedFix ? [aiResult.suggestedFix] : [])).map((issue, index) => (
+                      <div key={`${issue.field || 'issue'}-${index}`} style={{ marginTop: '1rem', padding: '0.9rem 1rem', borderRadius: '12px', border: '1px solid rgba(139,92,246,0.28)', background: 'rgba(15,23,42,0.35)' }}>
+                        <div className="tx-ai-section">
+                          <div className="tx-ai-label">FIELD</div>
+                          <div className="tx-ai-value">{issue.field}</div>
+                        </div>
+                        <div className="tx-ai-section">
+                          <div className="tx-ai-label">CURRENT VALUE</div>
+                          <div className="tx-ai-value">{issue.currentValue === '' ? '(empty)' : String(issue.currentValue)}</div>
+                        </div>
+                        <div className="tx-ai-section">
+                          <div className="tx-ai-label">PROBLEM</div>
+                          <div className="tx-ai-value">{issue.problem || issue.message || 'The field is invalid.'}</div>
+                        </div>
+                        <div className="tx-ai-section">
+                          <div className="tx-ai-label">EXPECTED TYPE</div>
+                          <div className="tx-ai-value">{issue.expectedType || 'valid value'}</div>
+                        </div>
+                        <div className="tx-ai-section">
+                          <div className="tx-ai-label">SUGGESTED FIX</div>
+                          <div className="tx-ai-value">{issue.suggestedValue || issue.message || 'Correct the value and retry.'}</div>
+                        </div>
                       </div>
-                      <div className="tx-ai-fix-item">
-                        <div className="tx-ai-label">Current Value</div>
-                        <div className="tx-ai-value">{String(aiResult.suggestedFix?.currentValue)}</div>
-                      </div>
-                      <div className="tx-ai-fix-item">
-                        <div className="tx-ai-label">Expected Type</div>
-                        <div className="tx-ai-value">{aiResult.suggestedFix?.expectedType}</div>
-                      </div>
-                      <div className="tx-ai-fix-item">
-                        <div className="tx-ai-label">Suggested Value</div>
-                        <div className="tx-ai-value">{String(aiResult.suggestedFix?.suggestedValue)}</div>
-                      </div>
-                    </div>
+                    ))}
                   </>
                 ) : null}
               </div>

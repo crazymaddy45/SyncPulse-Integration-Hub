@@ -165,14 +165,34 @@ export function EventIngestion({ onViewTransactions }) {
         )}
 
         {result && (
-          <div style={{ marginTop: '1rem', padding: '1rem 1.25rem', borderRadius: '12px', border: '1px solid rgba(34,197,94,0.35)', background: 'rgba(16,185,129,0.12)', color: '#dcfce7' }}>
+          <div style={{
+            marginTop: '1rem',
+            padding: '1rem 1.25rem',
+            borderRadius: '12px',
+            border: result.status === 'Failed' ? '1px solid rgba(239,68,68,0.35)' : '1px solid rgba(34,197,94,0.35)',
+            background: result.status === 'Failed' ? 'rgba(239,68,68,0.10)' : 'rgba(16,185,129,0.12)',
+            color: result.status === 'Failed' ? '#fecaca' : '#dcfce7'
+          }}>
             <div style={{ fontSize: '0.8rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', opacity: 0.9 }}>
-              Event processed successfully
+              {result.status === 'Failed' ? 'EVENT PROCESSING FAILED' : 'EVENT PROCESSED SUCCESSFULLY'}
             </div>
             <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.4rem' }}>
               <div><strong>Transaction ID:</strong> {result.id}</div>
               <div><strong>Status:</strong> {result.status}</div>
+              {result.status === 'Failed' && (
+                <div><strong>Validation issues:</strong> {Array.isArray(result.validationErrors) ? `${result.validationErrors.length} validation issue${result.validationErrors.length === 1 ? '' : 's'} found` : 'Validation failed'}</div>
+              )}
             </div>
+            {result.status === 'Failed' && Array.isArray(result.validationErrors) && result.validationErrors.length > 0 && (
+              <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.6rem' }}>
+                {result.validationErrors.map((issue, index) => (
+                  <div key={`${issue.field}-${index}`} style={{ padding: '0.6rem 0.75rem', borderRadius: '10px', background: 'rgba(15,23,42,0.35)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ fontWeight: 700, color: '#fca5a5' }}>❌ {issue.field}</div>
+                    <div style={{ marginTop: '0.25rem' }}>{issue.message}</div>
+                  </div>
+                ))}
+              </div>
+            )}
             {onViewTransactions && (
               <div style={{ marginTop: '1rem' }}>
                 <button className="btn-refresh btn-sm" onClick={onViewTransactions} type="button">

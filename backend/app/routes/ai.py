@@ -26,17 +26,85 @@ def _find_payload_value(payload, field_name):
     return None
 
 
+def _suggested_fix_for_field(field_name, current_value=None):
+    fix_map = {
+        'invoiceId': 'Enter a valid invoice ID.',
+        'product': 'Enter a valid product name.',
+        'quantity': 'Enter the quantity.',
+        'unitPrice': 'Enter a valid numeric unit price.',
+        'customerId': 'Provide a valid customer ID.',
+        'supplierCode': 'Add the correct supplier code.',
+    }
+    base_value = fix_map.get(field_name, 'Correct the invalid field and retry.')
+    if current_value == '':
+        return 'Provide a value for this required field.'
+    return base_value
+
+
+def _build_issue_from_error(error, source_payload):
+    field_name = error.get('field', 'unknown')
+    current_value = error.get('currentValue', _find_payload_value(source_payload, field_name))
+    message = error.get('message') or 'Field is invalid.'
+    issue_type = error.get('type', 'invalid')
+
+    if issue_type == 'missing':
+        problem = 'Required field is missing.'
+    elif issue_type == 'invalid_type':
+        problem = f"Expected type: {error.get('expectedType', 'valid value')}."
+    elif issue_type == 'invalid_value':
+        problem = 'Field value is invalid for the required business rules.'
+    else:
+        problem = message
+
+    return {
+        'field': field_name,
+        'currentValue': current_value if current_value is not None else 'empty',
+        'expectedType': error.get('expectedType', 'valid value'),
+        'problem': problem,
+        'suggestedValue': _suggested_fix_for_field(field_name, current_value),
+    }
+
+
 def _build_generic_explanation(transaction):
     transaction_id = transaction.get('id')
     source = transaction.get('source') or 'unknown source'
     target = transaction.get('target') or 'unknown destination'
     tx_type = transaction.get('type') or 'transaction'
-    error_message = transaction.get('errorMessage') or ''
     source_payload = transaction.get('sourcePayload') or {}
-
+    validation_errors = transaction.get('validationErrors') or []
+    error_message = transaction.get('errorMessage') or ''
     error_lower = error_message.lower()
     payload_lower = str(source_payload).lower()
     combined_text = f"{error_lower} {payload_lower}"
+
+    if validation_errors:
+        issues = [_build_issue_from_error(error, source_payload) for error in validation_errors]
+        issue_count = len(issues)
+        summary = f"The transaction failed because {issue_count} required field{'s' if issue_count != 1 else ''} are missing or invalid."
+        root_cause = 'The submitted payload does not satisfy the required schema for this transaction.'
+        impact = f'The {tx_type.lower()} could not be validated and therefore was not transformed or sent from {source} to {target}.'
+        recommendation = 'Correct all listed fields and retry the transaction.'
+        first_issue = issues[0] if issues else {
+            'field': 'unknown',
+            'currentValue': 'unknown',
+            'expectedType': 'valid value',
+            'problem': 'An invalid field was found.',
+            'suggestedValue': 'Review and correct the invalid field before retrying.'
+        }
+        return {
+            'transactionId': transaction_id,
+            'summary': summary,
+            'rootCause': root_cause,
+            'impact': impact,
+            'recommendation': recommendation,
+            'issues': issues,
+            'suggestedFix': {
+                'field': first_issue['field'],
+                'currentValue': first_issue['currentValue'],
+                'expectedType': first_issue['expectedType'],
+                'suggestedValue': first_issue['suggestedValue'],
+            },
+        }
 
     failure_profiles = [
         {
@@ -47,7 +115,7 @@ def _build_generic_explanation(transaction):
             'recommendation': 'Replace the invalid unitPrice value with a valid numeric amount before retrying the transaction.',
             'field': 'unitPrice',
             'expectedType': 'number',
-            'suggestedValue': 50000,
+            'suggestedValue': 'Enter a valid numeric unit price.',
         },
         {
             'keys': ['customerid', 'customer_id'],
@@ -57,7 +125,7 @@ def _build_generic_explanation(transaction):
             'recommendation': 'Supply a valid customer ID before retrying the transaction.',
             'field': 'customerId',
             'expectedType': 'string',
-            'suggestedValue': 'VALID_CUSTOMER_ID',
+            'suggestedValue': 'Provide a valid customer ID.',
         },
         {
             'keys': ['suppliercode', 'supplier_code', 'vendorcode', 'vendor_code'],
@@ -67,7 +135,7 @@ def _build_generic_explanation(transaction):
             'recommendation': 'Add the correct supplier code to the payload before retrying.',
             'field': 'supplierCode',
             'expectedType': 'string',
-            'suggestedValue': 'SUPPLIER-001',
+            'suggestedValue': 'Add the correct supplier code.',
         },
         {
             'keys': ['quantity'],
@@ -77,7 +145,7 @@ def _build_generic_explanation(transaction):
             'recommendation': 'Correct the quantity field to a valid positive value before retrying.',
             'field': 'quantity',
             'expectedType': 'number',
-            'suggestedValue': 1,
+            'suggestedValue': 'Enter the quantity.',
         },
     ]
 
@@ -90,6 +158,13 @@ def _build_generic_explanation(transaction):
                 'rootCause': profile['rootCause'],
                 'impact': profile['impact'],
                 'recommendation': profile['recommendation'],
+                'issues': [{
+                    'field': profile['field'],
+                    'currentValue': field_value if field_value is not None else 'unknown',
+                    'expectedType': profile['expectedType'],
+                    'problem': 'The field is invalid or missing.',
+                    'suggestedValue': profile['suggestedValue'],
+                }],
                 'suggestedFix': {
                     'field': profile['field'],
                     'currentValue': field_value if field_value is not None else 'unknown',
@@ -104,6 +179,13 @@ def _build_generic_explanation(transaction):
         'rootCause': 'An error occurred while processing the transaction.',
         'impact': 'The transaction could not be completed.',
         'recommendation': 'Review the transaction error and source payload before retrying.',
+        'issues': [{
+            'field': 'unknown',
+            'currentValue': error_message or 'unknown',
+            'expectedType': 'valid payload value',
+            'problem': 'The transaction contains an invalid payload or failed validation.',
+            'suggestedValue': 'Review and correct the invalid field before retrying.',
+        }],
         'suggestedFix': {
             'field': 'unknown',
             'currentValue': error_message or 'unknown',

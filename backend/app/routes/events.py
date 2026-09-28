@@ -9,6 +9,13 @@ from app.routes.transactions import TRANSACTIONS
 
 events_bp = Blueprint('events', __name__)
 
+INVOICE_FIELD_TYPES = {
+    'invoiceId': 'string',
+    'product': 'string',
+    'quantity': 'number',
+    'unitPrice': 'number',
+}
+
 
 def _next_transaction_id():
     """Generate the next TX-xxxx identifier based on the in-memory collection."""
@@ -37,6 +44,67 @@ def _coerce_positive_number(value, field_name):
     return numeric_value
 
 
+def _build_validation_issue(field, field_type, current_value, issue_type, message):
+    return {
+        'field': field,
+        'type': issue_type,
+        'currentValue': current_value,
+        'expectedType': field_type,
+        'message': message,
+    }
+
+
+def _validate_invoice_payload(event_payload):
+    errors = []
+    for field in ['invoiceId', 'product', 'quantity', 'unitPrice']:
+        value = event_payload.get(field)
+        field_type = INVOICE_FIELD_TYPES.get(field, 'string')
+
+        if value is None or value == '':
+            errors.append(_build_validation_issue(
+                field,
+                field_type,
+                value,
+                'missing',
+                f"Required field '{field}' is missing."
+            ))
+            continue
+
+        if field in ('invoiceId', 'product'):
+            if not isinstance(value, str) or not str(value).strip():
+                errors.append(_build_validation_issue(
+                    field,
+                    field_type,
+                    value,
+                    'invalid_type',
+                    f"Field '{field}' must be a string."
+                ))
+            continue
+
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            errors.append(_build_validation_issue(
+                field,
+                field_type,
+                value,
+                'invalid_type',
+                f"Field '{field}' must be a number."
+            ))
+            continue
+
+        if not math.isfinite(numeric_value) or numeric_value <= 0:
+            errors.append(_build_validation_issue(
+                field,
+                field_type,
+                value,
+                'invalid_value',
+                f"Field '{field}' must be a positive number."
+            ))
+
+    return {'valid': not errors, 'errors': errors}
+
+
 @events_bp.route('/api/events', methods=['POST'])
 def create_event_transaction():
     """Accept an external business event and create a corresponding transaction."""
@@ -45,6 +113,10 @@ def create_event_transaction():
     required = ['type', 'source', 'target', 'payload']
     missing = [field for field in required if field not in data or data[field] in (None, '')]
     if missing:
+        validation_errors = [
+            _build_validation_issue(field, 'string', data.get(field), 'missing', f"Required field '{field}' is missing.")
+            for field in missing
+        ]
         tx_id = _next_transaction_id()
         failed_transaction = {
             'id': tx_id,
@@ -52,11 +124,13 @@ def create_event_transaction():
             'source': str(data.get('source', '')).strip() or 'Unknown',
             'target': str(data.get('target', '')).strip() or 'Unknown',
             'status': 'Failed',
+            'valid': False,
             'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'integrationId': 'intg-event-ingest',
             'sourcePayload': data.get('payload') if isinstance(data.get('payload'), dict) else {},
             'transformedPayload': None,
-            'errorMessage': f"Validation failed: missing required field(s): {', '.join(missing)}",
+            'errorMessage': f"{len(validation_errors)} validation issue(s) found: {', '.join(err['field'] for err in validation_errors)}",
+            'validationErrors': validation_errors,
             'executionSteps': [
                 {'id': 1, 'name': 'Received', 'status': 'completed', 'detail': 'Event received from external source'},
                 {'id': 2, 'name': 'Validated', 'status': 'completed', 'detail': 'Event validation failed'},
@@ -73,6 +147,9 @@ def create_event_transaction():
         }), 201
 
     if not isinstance(data['payload'], dict):
+        validation_errors = [
+            _build_validation_issue('payload', 'object', data.get('payload'), 'invalid_type', "Field 'payload' must be an object.")
+        ]
         tx_id = _next_transaction_id()
         failed_transaction = {
             'id': tx_id,
@@ -80,11 +157,13 @@ def create_event_transaction():
             'source': str(data.get('source', '')).strip() or 'Unknown',
             'target': str(data.get('target', '')).strip() or 'Unknown',
             'status': 'Failed',
+            'valid': False,
             'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'integrationId': 'intg-event-ingest',
             'sourcePayload': {},
             'transformedPayload': None,
-            'errorMessage': 'Validation failed: payload must be an object',
+            'errorMessage': '1 validation issue found: payload',
+            'validationErrors': validation_errors,
             'executionSteps': [
                 {'id': 1, 'name': 'Received', 'status': 'completed', 'detail': 'Event received from external source'},
                 {'id': 2, 'name': 'Validated', 'status': 'completed', 'detail': 'Event validation failed'},
@@ -105,25 +184,12 @@ def create_event_transaction():
     target = str(data['target']).strip()
     event_payload = data['payload']
 
-    validation_error = None
+    validation_result = {'valid': True, 'errors': []}
 
     if event_type.lower() == 'invoice':
-        required_invoice_fields = ['invoiceId', 'product', 'quantity', 'unitPrice']
-        missing_invoice_fields = [
-            field for field in required_invoice_fields
-            if field not in event_payload or event_payload.get(field) in (None, '')
-        ]
+        validation_result = _validate_invoice_payload(event_payload)
 
-        if missing_invoice_fields:
-            validation_error = f"Invoice validation failed: missing required field(s): {', '.join(missing_invoice_fields)}"
-        else:
-            try:
-                _coerce_positive_number(event_payload.get('quantity'), 'quantity')
-                _coerce_positive_number(event_payload.get('unitPrice'), 'unitPrice')
-            except ValueError as exc:
-                validation_error = str(exc)
-
-    if validation_error:
+    if not validation_result['valid']:
         tx_id = _next_transaction_id()
         failed_transaction = {
             'id': tx_id,
@@ -131,6 +197,7 @@ def create_event_transaction():
             'source': source,
             'target': target,
             'status': 'Failed',
+            'valid': False,
             'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'integrationId': 'intg-event-ingest',
             'sourcePayload': {
@@ -140,7 +207,8 @@ def create_event_transaction():
                 'unitPrice': event_payload.get('unitPrice')
             },
             'transformedPayload': None,
-            'errorMessage': validation_error,
+            'errorMessage': f"{len(validation_result['errors'])} validation issue(s) found: {', '.join(err['field'] for err in validation_result['errors'])}",
+            'validationErrors': validation_result['errors'],
             'executionSteps': [
                 {'id': 1, 'name': 'Received', 'status': 'completed', 'detail': 'Event received from external source'},
                 {'id': 2, 'name': 'Validated', 'status': 'completed', 'detail': 'Event validation failed'},
@@ -163,6 +231,7 @@ def create_event_transaction():
         'source': source,
         'target': target,
         'status': 'Success',
+        'valid': True,
         'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'integrationId': 'intg-event-ingest',
         'sourcePayload': {
@@ -178,6 +247,7 @@ def create_event_transaction():
             'unitPrice': event_payload.get('unitPrice')
         },
         'errorMessage': None,
+        'validationErrors': [],
         'executionSteps': [
             {'id': 1, 'name': 'Received', 'status': 'completed', 'detail': 'Event received from external source'},
             {'id': 2, 'name': 'Validated', 'status': 'completed', 'detail': 'Event payload validated'},
